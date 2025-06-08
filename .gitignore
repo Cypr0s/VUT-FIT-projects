@@ -1,0 +1,15 @@
+*.zip
+*.o
+
+#IJC
+primes
+primes-i
+steg-decode
+
+tail
+libhtab.a
+libhtab.so
+maxwordcount-dynamic
+maxwordcount
+maxwordcount-cpp
+

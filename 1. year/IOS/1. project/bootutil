@@ -1,0 +1,345 @@
+#!/bin/bash
+# xluptak00 Kristian Luptak
+# 6.4.2025
+
+
+
+BOOT_PATH="/boot/loader/entries"
+
+# Changing BOOT_PATH 
+if [ "$1" = "-b" ]; then
+	if [ -z "$2" ]; then
+		echo "Missing the new path"
+		exit 1
+	fi
+	BOOT_PATH="$2"
+	shift 2
+fi
+
+# function for replacing line in file with updated one $1=key, $2=file, $3=new line content
+rewrite_file() {
+	filtered_content=$(grep -v "^$1" "$2")
+    echo "$filtered_content" > "$2"
+    echo "$1 $3" >> "$2"
+}
+
+# function for listing all conf files in BOOT_PATH, priting $title ($version, $linux)
+write_list() {
+	filesort=1
+	while getopts "sfk:t:" opt; do
+		# filesort is default
+		case  "$opt" in
+			s)	
+				#sorts output by filename
+				filesort=0
+				keysort=1
+				;;
+			f)	
+				#sorts output by key if present if not then by filename
+				filesort=1
+				keysort=0
+				;;
+			k)	
+				#prints only the lines in which the $linux contains kernel_regex
+				kernel_regex="$OPTARG"
+				;;
+			t)	
+				#prints only the lines in which the $linux contains title_regex
+				title_regex="$OPTARG"
+				;;
+		esac
+	done
+	
+	
+	if [ "$filesort" -eq 1 ]; then
+		for file in "$BOOT_PATH"/*.conf; do
+			#getting the lines from file, cutting the <key> out of them, taking only last one if multiple lines have <key>, filtering matching <regex>
+			title=$(grep "^title" "$file" | cut -d " " -f2- | tail -n 1 | grep "$title_regex")
+			version=$(grep "^version" "$file" | cut -d " " -f2- | tail -n 1)
+			linux=$(grep "^linux" "$file" | cut -d " " -f2- | tail -n 1 | grep "$kernel_regex")
+	
+			if [ -n "$title" ] && [ -n "$linux" ]; then
+				echo "$title ($version, $linux)"
+			fi
+		done
+		exit 0 
+	fi
+
+
+	if  [ "$keysort" -eq 1 ]; then
+		# for files with key
+		for file in "$BOOT_PATH"/*.conf; do
+			key=$(grep "key" "$file" | cut -d " " -f2- | tail -n 1)
+			if [ -z "$key" ]; then
+				continue
+			fi
+			
+			#getting the lines from file, cutting the <key> out of them, taking only last one if multiple lines have <key>, filtering matching <regex>
+			title=$(grep "^title" "$file" | cut -d " " -f2- | tail -n 1 | grep "$title_regex")
+			version=$(grep "^version" "$file" | cut -d " " -f2- | tail -n 1)
+			linux=$(grep "^linux" "$file" | cut -d " " -f2- | tail -n 1 | grep "$kernel_regex")
+			if [ -n "$title" ] && [ -n "$linux" ]; then
+				echo "$key $title ($version, $linux)"
+			fi
+			#soring by key, cutting key out after that
+		done | sort -k1,1 | cut -d " " -f2-
+	
+		# for files without key
+		for file in "$BOOT_PATH"/*.conf; do
+			key=$(grep "key" "$file" | cut -d " " -f2- | tail -n 1)
+			if [ -n "$key" ]; then
+				continue
+			fi
+			#getting the lines from file, cutting the <key> out of them, taking only last one if multiple lines have <key>, filtering matching <regex>
+			title=$(grep "^title" "$file" | cut -d " " -f2- | tail -n 1 | grep "$title_regex")
+			version=$(grep "^version" "$file" | cut -d " " -f2- | tail -n 1)
+			linux=$(grep "^linux" "$file" | cut -d " " -f2- | tail -n 1 | grep "$kernel_regex")
+			if [ -n "$title" ] && [ -n "$linux" ]; then
+				echo "$title ($version, $linux)"
+			fi
+		done
+		exit 0
+	fi
+	exit 0
+}
+
+# function for removing file in BOOT_PATH
+remove() {
+	if [ -z "$1" ]; then
+		echo "missing parameters"
+		exit 1
+	fi
+
+	for file in "$BOOT_PATH"/*.conf; do
+		title=$(grep "^title" "$file" | cut -d " " -f2- | tail -n 1 )
+		#if line matches remove the file
+		if echo "$title" | grep -q "$1"; then
+			rm -f "$file"
+		fi
+	done
+	exit 0
+}
+
+# function for duplicating the file and creating a copy with -copy- suffix
+duplicate() {
+	# List for storing the add and remove
+	addremove=()
+	
+	make_def=0
+	while getopts "k:i:t:a:r:d:-:" opt; do
+		case "$opt" in
+			k) 	
+				# k OPTARG rewrites linux key in duplicated file
+				k_arg="$OPTARG"
+				;;
+			i) 	
+				# i OPTARG rewrites initdr key in duplicated file
+				i_arg="$OPTARG"
+				;;
+			t) 	
+				# t OPTARG rewrites ititle key in duplicated file
+				t_arg="$OPTARG"
+				;;
+			a) 	
+				# a OPTARG adds options to option key in duplicated file
+				addremove+=("add $OPTARG")
+				;;
+			r) 	
+				# r OPTARG removes options from option key in duplicated file
+				addremove+=("rem $OPTARG")
+				;;
+			d) 	
+				# d changes the destination path of the duplicated file
+				d_arg="$OPTARG"
+				;;
+			-) 	
+				# makes the duplicated file default one
+				case "$OPTARG" in
+					"make-default")
+						make_def=1
+						;;
+					*)
+						echo "Invalid paramerters"
+						exit 1
+						;;
+				esac
+				;;
+			*)	
+				echo "Invalid parameters"
+				exit 1
+				;;
+		esac
+	done
+	
+	shift $((OPTIND - 1))
+	
+	# if no dest file path is provided we copy ufit_default path
+	if [ -z "$1" ]; then
+		# getting vufit_default path
+		source_path=$( show_default -f )
+		if [ -z "$source_path" ]; then
+			echo "No default file exists"
+			exit 1
+		fi
+		#adding suffix
+		dest_path="${source_path%.*}-copy-.conf"
+	else
+		source_path="$1"
+		dest_path="${source_path%.*}-copy-.conf"
+	fi
+	
+	if [ -n "$d_arg" ]; then
+		dest_path="$d_arg"
+	fi
+	
+	cp "$source_path" "$dest_path"
+	
+	# adding rewriting file with new title / linux / initrd 
+	if [ -n "$k_arg" ]; then
+		rewrite_file "linux" "$dest_path" "$k_arg"
+	fi
+	
+	if [ -n "$i_arg" ]; then
+		rewrite_file "initrd" "$dest_path" "$i_arg"
+	fi
+	
+	if [ -n "$t_arg" ]; then
+		rewrite_file "title" "$dest_path" "$t_arg"
+	fi
+	
+	# processing a and r parameters
+	if [ -n "$addremove" ]; then
+		options=$(grep "options" "$dest_path" | cut -d " " -f2- | tail -n 1)
+		for item in "${addremove[@]}"; do
+			case "$item" in
+				add*)
+					# add evey parameter to options if not already in there
+					command=$(echo "$item" | cut -d " " -f2-)
+					for param in $command; do
+						if ! echo "$options" | xargs -n1 | grep -q "$param"; then
+							 options="$options $param"
+						fi
+					done
+					;;
+				
+				rem*)
+					# remove evey parameter from options that matches anything from command
+					command=$(echo "$item" | cut -d " " -f2-)
+					for param in $command; do
+						options=$(echo "$options" | xargs -n1 | grep -v "^$param" | xargs)
+					done
+					;;
+			esac
+		done
+		rewrite_file "options" "$dest_path" "$options"
+	fi
+	
+	# making copied file default
+	if [ "$make_def" -eq 1 ]; then
+		make_default "$dest_path"
+	fi
+	exit 0 
+}
+
+# function finding file that has vutfit_default set to y and printing either file content or its path
+show_default() {
+	show_path=0
+	
+	# 3 hours of debugging here because of this ( line 179 )
+	#while getopts "f" opt; do
+	#	case "$opt" in
+	#		f)
+	#			show_path=1
+	#			;;
+	#		*) 
+	#			echo "invalid parameters only parameter -f allowed"
+	#			exit 1
+	#			;;
+	#	esac
+	#done
+	
+    if [ "$1" = "-f" ]; then
+        show_path=1
+    elif [ -n "$1" ]; then
+        echo "Invalid parameters"
+        exit 1
+    fi
+
+	printfile=""
+	# looping through all files and finding one that contains 'vutfit_default y'
+	for file in "$BOOT_PATH"/*.conf; do
+		vutfit=$(grep "^vutfit_default" "$file" | cut -d " " -f2- | tail -n 1)
+		if [ "$vutfit" = "y" ]; then
+			printfile="$file"
+		fi
+	done
+
+	# if no file was found
+	if [ -z "$printfile" ]; then
+		exit 1
+	fi
+	
+	#printing path or content of file
+	if [ "$show_path" -eq 1 ]; then
+		echo "$printfile"
+		exit 0
+	fi
+
+	cat "$printfile"
+	exit 0
+}
+
+
+# function for making 'file'($1) the vutfit_default file (setting vutfit_default y)
+make_default() {
+	if [ -z "$1" ]; then
+		echo "Missing parameters"
+		exit 1
+	fi
+	found=0
+	# looping through all files
+	# rewriting key to 'vutfit_default y' if file matches $1
+	# rewrite all others files key 'vutfit_default n'
+	for file in "$BOOT_PATH"/*.conf; do
+		if [ "$file" = "$1" ]; then
+			rewrite_file "vutfit_default" "$file" "y"
+			found=1
+			continue
+		else
+			rewrite_file "vutfit_default" "$file" "n"
+		fi
+	done
+	# if no file was found that matches return exit 1
+	if [ "$found" -eq 1 ]; then
+		exit 0
+	fi
+	exit 1
+}
+
+
+case $1 in
+	"list")
+		shift 1
+		write_list "$@" 
+		;;
+	"remove")
+		shift 1
+		remove "$@" 
+		;;
+	"duplicate")
+		shift 1
+		duplicate "$@" 
+		;;
+	"show-default")
+		shift 1
+		show_default "$@"
+		;;
+	"make-default")
+		shift 1
+		make_default "$@"
+		;;
+	*) 
+		echo "invalid input"
+		exit 1
+		;;
+esac
